@@ -5,10 +5,12 @@
 //   MAKEFUN_OUTPUT_DIR=out node main.ts
 //
 // Outside local testing the output directory is /output. The program runs
-// twice and both runs must write the same bytes, so it deletes the output
-// directory first and rebuilds it deterministically from the repository.
+// twice and both runs must write the same bytes, so it rebuilds
+// deterministically from the repository: it only creates the output
+// directory (never deletes it — in the grader /output is a mount point,
+// and deleting a mount point fails) and copies the same files over it.
 
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-frontend.ts';
@@ -23,7 +25,6 @@ function copyTree(name) {
   cpSync(from, to, { recursive: true });
 }
 
-rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 copyTree('app');
 copyTree('screenshots');
