@@ -1,183 +1,159 @@
-// The bounty, leaderboard and profile pages: functions from API data to HTML.
-// Loaded on demand by main.js, after the first load, with a literal import().
+// A bounty's page and its leaderboard. The bounty page shows the summary,
+// the full rules text (rendered Markdown), the live pot and fee, the dates
+// and the rewards table with the fee shares as they stand now. The
+// leaderboard shows the judged entries ranked by win rate, 25 rows at a time,
+// with each entrant's avatar and a link to their public profile.
 
-import { bytes, date, esc, money, num, pct, takesEntries, timeLeft, yesno } from './format.js';
-import { pot } from './views-board.js';
+import { apiImage, getJson } from './api.js';
+import { bytes, dateShort, dateTime, esc, num, stillOpen, timeLeft, usd, usd0, winRate } from './format.js';
+import { renderMarkdown } from './md.js';
+import { errorView, loadingView } from './main.js';
 
-const SITE = 'https://make.fun';
+const PAGE_SIZE = 25;
 
-/** An <img> for an API image. make.fun's images send Cross-Origin-Resource-Policy:
- * same-origin, so crossorigin="anonymous" goes on before src. */
-function img(src, alt, cls) {
-  if (!src) return '';
-  const url = src.startsWith('/') ? SITE + src : src;
-  return `<img class="${cls}" crossorigin="anonymous" src="${esc(url)}" alt="${esc(alt)}" loading="lazy">`;
-}
-
-/** Inline markdown: **bold**, `code`, and links [text](https://…). Links open
- * in a new tab with rel="noopener" — the API text is not ours to trust. */
-function inline(text) {
-  return esc(text)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" rel="noopener">$1</a>');
-}
-
-/** A bounty description: #, ## and ### headings, > quotes, - lists, paragraphs. */
-export function md(text) {
-  const lines = String(text ?? '').split('\n');
-  let html = '';
-  let list = false;
-  const closeList = () => {
-    if (list) {
-      html += '</ul>';
-      list = false;
-    }
-  };
-  for (const line of lines) {
-    if (line.startsWith('### ')) {
-      closeList();
-      html += `<h3>${inline(line.slice(4))}</h3>`;
-    } else if (line.startsWith('## ')) {
-      closeList();
-      html += `<h2>${inline(line.slice(3))}</h2>`;
-    } else if (line.startsWith('# ')) {
-      closeList();
-      html += `<h2>${inline(line.slice(2))}</h2>`;
-    } else if (line.startsWith('> ')) {
-      closeList();
-      html += `<blockquote>${inline(line.slice(2))}</blockquote>`;
-    } else if (line.startsWith('- ')) {
-      if (!list) {
-        html += '<ul>';
-        list = true;
-      }
-      html += `<li>${inline(line.slice(2))}</li>`;
-    } else if (line.trim() === '') {
-      closeList();
-    } else {
-      closeList();
-      html += `<p>${inline(line)}</p>`;
-    }
+function statusPill(c, now) {
+  if (c.status === 'open' && stillOpen(c.deadline, now)) {
+    return '<span class="pill open">Open for entries</span>';
   }
-  closeList();
-  return html;
+  if (c.status === 'open') return '<span class="pill closed">Entries closed</span>';
+  return `<span class="pill closed">${esc(c.status)}</span>`;
 }
 
-/** A bounty's page: summary, rules, rewards with the live pot, dates, status. */
-export function bountyView(b) {
-  const open = takesEntries(b);
-  const live = Array.isArray(b.rewardsNow) && b.rewardsNow.length ? b.rewardsNow : null;
-  const rewardRows = live
-    ? live
-        .map(
-          (r) => `<tr><td>${num(r.place)}</td><td class="num">${money(r.baseUsd)}</td><td class="num">${money(r.feeShareUsd)}</td><td class="num"><b>${money(r.amountUsd)}</b></td></tr>`,
-        )
-        .join('')
-    : Object.entries(b.rewards || {})
-        .map(([place, amount]) => `<tr><td>${num(place)}</td><td class="num">${money(amount)}</td><td class="num">—</td><td class="num"><b>${money(amount)}</b></td></tr>`)
-        .join('');
-  return `
-    <p><a href="#/">← All bounties</a></p>
-    <h1>${esc(b.title)}</h1>
-    <p><span class="chip ${open ? 'open' : 'shut'}">${open ? 'Open for entries' : 'Closed to entries'}</span>
-    <span class="chip">${esc(b.category || '')}</span>
-    <span class="chip">${num(b.submissionCount)} ${b.submissionCount === 1 ? 'entry' : 'entries'}</span></p>
-    <p>${esc(b.summary || '')}</p>
-    <dl class="facts">
-      <dt>Live pot</dt><dd><b>${pot(b)}</b> (base reward ${money(b.rewardAmount)})</dd>
-      <dt>Entry fee</dt><dd>${b.entryFeeUsd ? money(b.entryFeeUsd) + ' once per account' : 'None'}${b.entryFeePayers ? ` · ${num(b.entryFeePayers)} paid` : ''}</dd>
-      <dt>Deadline</dt><dd><span data-deadline="${esc(b.deadline)}">${timeLeft(b.deadline)}</span> · ${date(b.deadline)}</dd>
-      <dt>Published</dt><dd>${date(b.publishedAt)}</dd>
-      <dt>Sponsor</dt><dd>${esc(b.sponsor?.name || '—')}${b.sponsor?.isVerified ? ' ✓' : ''}</dd>
-    </dl>
-    <p><a href="#/bounty/${encodeURIComponent(b.slug)}/leaderboard">Leaderboard →</a> ·
-    <a href="${SITE}/bounty/${encodeURIComponent(b.slug)}" rel="noopener">View on make.fun ↗</a></p>
-    <h2>Rewards</h2>
-    <table>
+function rewardsTable(c) {
+  const nowRows = (c.rewardsNow || []).slice().sort((a, b) => a.place - b.place);
+  if (nowRows.length) {
+    return `<table>
       <thead><tr><th>Place</th><th class="num">Base</th><th class="num">From entry fees</th><th class="num">Now</th></tr></thead>
-      <tbody>${rewardRows}</tbody>
-    </table>
-    <h2>Rules</h2>
-    <div class="desc">${md(b.description || '')}</div>`;
+      <tbody>${nowRows.map((r) => `<tr>
+        <td>${num(r.place)}</td>
+        <td class="num">${usd(r.baseUsd)}</td>
+        <td class="num">${usd(r.feeShareUsd)}</td>
+        <td class="num"><strong>${usd(r.amountUsd)}</strong></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+  const base = c.rewards || {};
+  const places = Object.keys(base).map(Number).sort((a, b) => a - b);
+  if (!places.length) return '<p class="muted">No rewards table published yet.</p>';
+  return `<table>
+    <thead><tr><th>Place</th><th class="num">Reward</th></tr></thead>
+    <tbody>${places.map((p) => `<tr><td>${num(p)}</td><td class="num"><strong>${usd(base[p])}</strong></td></tr>`).join('')}</tbody>
+  </table>`;
 }
 
-/** A bounty's leaderboard: rank, entrant, win rate with its 90% interval, size. */
-export function leaderboardView(lb, shown) {
-  const c = lb.competition || {};
-  const entries = lb.entries || [];
-  const rows = entries
-    .slice(0, shown)
-    .map((e) => {
-      const v = e.values || {};
-      const d = e.display || {};
-      return `<tr>
-        <td class="num">${num(e.rank)}</td>
-        <td><span class="who">${img(e.image, e.handle + ' avatar', 'avatar sm')}<a href="#/u/${encodeURIComponent(e.handle)}">${esc(e.handle)}</a></span><br><span class="mut">${esc(e.title || '')}</span></td>
-        <td class="num"><b>${pct(v.judge ?? d.judge)}</b></td>
-        <td class="num">${pct(v.judge_low ?? d.judge_low)} – ${pct(v.judge_high ?? d.judge_high)}</td>
-        <td class="num">${yesno(v.valid ?? d.valid)}</td>
-        <td class="num">${bytes(v.bytes ?? d.bytes)}</td>
-      </tr>`;
-    })
-    .join('');
-  return `
-    <p><a href="#/bounty/${encodeURIComponent(c.slug || '')}">← ${esc(c.title || 'Bounty')}</a></p>
-    <h1>Leaderboard: ${esc(c.title || '')}</h1>
-    <p class="mut">${esc(lb.phase?.title || '')}${lb.phase?.ends_at ? ` · ends ${date(lb.phase.ends_at)}` : ''} · ranked by ${esc(lb.rank_key || 'judge')} win rate · tie-break: smaller dossier</p>
-    ${entries.length ? `
-    <table>
-      <thead><tr><th class="num">#</th><th>Entrant</th><th class="num">Win rate</th><th class="num">90% interval</th><th class="num">Valid</th><th class="num">Size</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <p class="mut">Showing ${num(Math.min(shown, entries.length))} of ${num(entries.length)} entries.</p>
-    ${entries.length > shown ? '<p class="more"><button type="button" class="ghost" data-show-all>Show all</button></p>' : ''}`
-    : '<p>No scored entries yet — results appear as the judge heat runs.</p>'}`;
+export async function renderBounty(container, slug) {
+  container.innerHTML = loadingView();
+  let c;
+  try {
+    c = await getJson('/competitions/' + encodeURIComponent(slug));
+  } catch (err) {
+    container.innerHTML = errorView(err?.message || 'Could not load that bounty.');
+    return;
+  }
+  document.title = `${c.title} · make.fun`;
+
+  const now = Date.now();
+  const feeLine = c.entryFeeUsd
+    ? `$${Number(c.entryFeeUsd).toFixed(2)} once per account · ${num(c.entryFeePayers)} paid`
+    : 'Free to enter';
+  const sponsor = c.sponsor?.name
+    ? esc(c.sponsor.name) + (c.sponsor.isVerified ? ' ✓' : '')
+    : '—';
+  const firstPara = String(c.description || '').split('\n\n')[0].trim();
+
+  container.innerHTML = `
+    <a class="backlink" href="#/">← All bounties</a>
+    <h1>${esc(c.title)}</h1>
+    <div class="row-meta">${statusPill(c, now)}<span>${esc(c.category || '')}</span><span>${num(c.submissionCount)} entries</span></div>
+    ${firstPara ? `<p class="sub">${esc(firstPara)}</p>` : ''}
+    <div class="facts"><dl>
+      <dt>Live pot</dt><dd><strong>${usd0(c.potUsd ?? c.rewardAmount)}</strong> <span class="muted">(base reward ${usd0(c.rewardAmount)})</span></dd>
+      <dt>Entry fee</dt><dd>${esc(feeLine)}</dd>
+      <dt>Deadline</dt><dd>${esc(timeLeft(c.deadline, now))} · ${esc(dateTime(c.deadline))}</dd>
+      <dt>Published</dt><dd>${esc(dateTime(c.publishedAt))}</dd>
+      <dt>Sponsor</dt><dd>${sponsor}</dd>
+    </dl></div>
+    <p><a href="#/bounty/${esc(c.slug)}/leaderboard">Leaderboard →</a> · <a href="https://make.fun/bounty/${esc(c.slug)}" target="_blank" rel="noopener">View on make.fun ↗</a></p>
+    <h2>Rewards</h2>
+    ${rewardsTable(c)}
+    <h2>Rules &amp; description</h2>
+    <div class="md">${renderMarkdown(c.description || '')}</div>`;
+
+  // Hide avatar images that fail to load (capture phase: error does not bubble).
+  container.addEventListener('error', (e) => {
+    if (e.target instanceof HTMLImageElement) e.target.style.display = 'none';
+  }, true);
 }
 
-/** An account's public profile: record, payouts, entries. */
-export function profileView(p) {
-  const r = p.record || {};
-  const payouts = Array.isArray(p.payouts) ? p.payouts : [];
-  const paid = payouts.reduce((s, x) => s + Number(x.amount_usd || 0), 0);
-  const solutions = (p.solutions || [])
-    .map(
-      (s) => {
-        const comp = s.competition || {};
-        return `<tr>
-          <td><a href="#/bounty/${encodeURIComponent(comp.slug || '')}">${esc(s.title || comp.title || '')}</a><br><span class="mut">${esc(comp.title || '')}</span></td>
-          <td class="num">${s.placement ? '#' + num(s.placement) : '—'}</td>
-          <td class="num">${s.prize_usd ? money(s.prize_usd) : '—'}</td>
-          <td class="num">${s.score ? pct(s.score.value) : '—'}</td>
-          <td class="num">${date(s.entered_at)}</td>
-        </tr>`;
-      },
-    )
-    .join('');
-  return `
-    <p><a href="#/">← All bounties</a></p>
-    <div class="profile-head">
-      ${img(p.avatar?.url || p.image, (p.display_name || p.handle) + ' avatar', 'avatar')}
-      <div>
-        <h1>${esc(p.display_name || p.handle)}</h1>
-        <p class="mut">@${esc(p.handle)} · joined ${date(p.joined_at)}</p>
-        ${p.bio ? `<p>${esc(p.bio)}</p>` : ''}
-        <p>${p.github_login ? `<a href="https://github.com/${encodeURIComponent(p.github_login)}" rel="noopener">GitHub: ${esc(p.github_login)}</a> · ` : ''}${p.x ? `<a href="https://x.com/${encodeURIComponent(p.x)}" rel="noopener">X: ${esc(p.x)}</a> · ` : ''}${p.discord ? `<span>Discord: ${esc(p.discord)}</span>` : ''}</p>
-      </div>
-    </div>
-    <div class="statgrid">
-      <div><b>${num(r.competitions_entered)}</b><span>entered</span></div>
-      <div><b>${num(r.competitions_placed)}</b><span>placed</span></div>
-      <div><b>${num(r.competitions_won)}</b><span>won</span></div>
-      <div><b>${num(r.podium_finishes)}</b><span>podiums</span></div>
-      <div><b>${r.best_placement ? '#' + num(r.best_placement) : '—'}</b><span>best place</span></div>
-      <div><b>${money(r.prize_usd)}</b><span>prize money</span></div>
-      <div><b>${money(paid)}</b><span>paid out (${num(payouts.length)})</span></div>
-    </div>
-    <h2>Entries</h2>
-    ${solutions ? `
+function entryRow(e, rankKey) {
+  const v = e.values || {};
+  const rate = winRate(v[rankKey] ?? v.judge);
+  const low = winRate(v.judge_low);
+  const high = winRate(v.judge_high);
+  const img = apiImage(e.image);
+  const avatar = img
+    ? `<img class="lb-avatar" src="${esc(img)}" alt="" crossorigin="anonymous" loading="lazy">`
+    : '';
+  const handle = e.handle
+    ? `<a href="#/u/${encodeURIComponent(e.handle)}">${esc(e.handle)}</a>`
+    : esc(e.title || '—');
+  const medal = e.rank === 1 ? 'medal-1' : e.rank === 2 ? 'medal-2' : e.rank === 3 ? 'medal-3' : '';
+  return `<tr>
+    <td class="${medal}">${num(e.rank)}</td>
+    <td>${avatar}${handle}<div class="lb-title">${esc(e.title || '')}</div></td>
+    <td class="num winrate">${rate}</td>
+    <td class="num hide-narrow">${low} – ${high}</td>
+    <td class="num hide-narrow">${v.valid ?? '—'}</td>
+    <td class="num hide-narrow">${bytes(v.bytes)}</td>
+  </tr>`;
+}
+
+export async function renderLeaderboard(container, slug) {
+  container.innerHTML = loadingView();
+  let data;
+  try {
+    data = await getJson('/competitions/' + encodeURIComponent(slug) + '/leaderboard');
+  } catch (err) {
+    container.innerHTML = errorView(err?.message || 'Could not load that leaderboard.');
+    return;
+  }
+  const comp = data.competition || {};
+  const phase = data.phase || {};
+  document.title = `Leaderboard: ${comp.title || slug} · make.fun`;
+
+  const entries = (data.entries || []).filter((e) => e.ranked !== false);
+  const rankKey = data.rank_key || 'judge';
+  const tie = data.tie_break?.title ? ` · tie-break: ${data.tie_break.title}` : '';
+
+  container.innerHTML = `
+    <a class="backlink" href="#/bounty/${esc(slug)}">← ${esc(comp.title || slug)}</a>
+    <h1>Leaderboard: ${esc(comp.title || slug)}</h1>
+    <p class="sub">${esc(phase.title || '')}${phase.ends_at ? ` · ends ${esc(dateShort(phase.ends_at))}` : ''} · ranked by judge win rate${esc(tie)}</p>
+    <p class="countline" id="lb-count"></p>
     <table>
-      <thead><tr><th>Entry</th><th class="num">Place</th><th class="num">Prize</th><th class="num">Score</th><th class="num">Entered</th></tr></thead>
-      <tbody>${solutions}</tbody>
-    </table>` : '<p>No entries yet.</p>'}`;
+      <thead><tr><th>#</th><th>Entrant</th><th class="num">Win rate</th><th class="num hide-narrow">90% interval</th><th class="num hide-narrow">Valid</th><th class="num hide-narrow">Size</th></tr></thead>
+      <tbody id="lb-body"></tbody>
+    </table>
+    <p class="lb-more"><button class="btn" type="button" id="lb-more">Show more</button></p>`;
+
+  const body = container.querySelector('#lb-body');
+  const countEl = container.querySelector('#lb-count');
+  const moreBtn = container.querySelector('#lb-more');
+  let shown = 0;
+
+  function renderMore() {
+    const next = entries.slice(shown, shown + PAGE_SIZE);
+    body.insertAdjacentHTML('beforeend', next.map((e) => entryRow(e, rankKey)).join(''));
+    shown += next.length;
+    countEl.textContent = entries.length
+      ? `Showing ${num(shown)} of ${num(entries.length)} ranked entries`
+      : 'No ranked entries yet.';
+    moreBtn.style.display = shown >= entries.length ? 'none' : '';
+  }
+
+  moreBtn.addEventListener('click', renderMore);
+  container.addEventListener('error', (e) => {
+    if (e.target instanceof HTMLImageElement) e.target.style.display = 'none';
+  }, true);
+  renderMore();
 }

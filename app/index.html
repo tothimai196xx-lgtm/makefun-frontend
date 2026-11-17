@@ -4,26 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>make.fun bounties</title>
-<meta name="description" content="A fast, light frontend for make.fun bounties: the live board, bounty pages, leaderboards and public profiles.">
-<style>body{margin:0 auto;max-width:1024px;padding:0 16px 48px;font:16px/1.55 system-ui,sans-serif;color:#17181c}a{color:#0b5cad}header{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;padding:14px 0;border-bottom:1px solid #e3e5e9}.brand{font-weight:700;font-size:19px;text-decoration:none;color:#17181c}.brand span{font-weight:400;color:#5b606b}header nav{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-left:auto}header nav>a{font-weight:600}#lookup{display:flex;gap:6px}input,select,button{font:inherit;padding:7px 10px;border:1px solid #b9bec7;border-radius:6px;background:#fff;color:#17181c}button{cursor:pointer;background:#0b5cad;border-color:#0b5cad;color:#fff;font-weight:600}#handle{width:210px}h1{font-size:26px;line-height:1.25;margin:18px 0 8px}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.skip{position:absolute;left:-9999px;top:0;background:#0b5cad;color:#fff;padding:8px 12px}.skip:focus{left:8px;top:8px}.board{list-style:none;margin:8px 0;padding:0}.board li{padding:12px 2px;border-bottom:1px solid #e3e5e9}.board h3{margin:0;font-size:17px}.mut{color:#5b606b}.loading{color:#5b606b;padding:24px 0}.error{background:#fbecec;border-radius:8px;padding:14px 16px;margin:14px 0}footer{border-top:1px solid #e3e5e9;color:#5b606b;font-size:14px;padding-top:12px}</style>
-<script type="module" src="main.js"></script>
+<meta name="description" content="A fast, read-only frontend for make.fun bounties: the live board, bounty pages, leaderboards and public profiles.">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:,">
 </head>
 <body>
-<a class="skip" href="#app">Skip to content</a>
-<header>
-  <a class="brand" href="#/">make.fun <span>bounties</span></a>
-  <nav aria-label="Main">
-    <a href="#/">Board</a>
-    <form id="lookup" role="search" action="#/">
-      <label class="vh" for="handle">Account handle</label>
-      <input id="handle" name="handle" type="search" placeholder="handle, e.g. superskie" autocomplete="off" spellcheck="false">
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="brand" href="#/"><strong>make.fun</strong> <span>bounties</span></a>
+    <nav class="topnav" aria-label="Main">
+      <a href="#/" data-nav="board">Board</a>
+      <a href="https://make.fun" target="_blank" rel="noopener">make.fun ↗</a>
+    </nav>
+    <form class="profilesearch" id="profile-form" role="search">
+      <label class="visually-hidden" for="profile-handle">Look up a profile</label>
+      <input id="profile-handle" name="handle" type="search" placeholder="handle, e.g. lucdk" autocomplete="off" spellcheck="false">
       <button type="submit">Profile</button>
     </form>
-  </nav>
+  </div>
 </header>
-<main id="app" tabindex="-1"></main>
-<footer>
-  <p>Unofficial lightweight client. Data comes from the <a href="https://make.fun">make.fun</a> public API, read-only; no sign-in. <a href="#/">Back to the board</a></p>
+<main class="wrap" id="view" aria-live="polite"></main>
+<footer class="wrap foot">
+  <p>Unofficial read-only frontend. Data comes live from <a href="https://make.fun/api/competitions?status=open">make.fun&rsquo;s public API</a>. No sign-in, nothing is written back.</p>
+  <p>Built for the <a href="https://make.fun/bounty/makefun-frontend-01">make.fun frontend bounty</a> · <a href="https://make.fun/r/wxz47nrz">try make.fun</a></p>
 </footer>
+<script>window.__shotReady = false;</script>
+<script type="module" src="/main.js"></script>
 </body>
 </html>

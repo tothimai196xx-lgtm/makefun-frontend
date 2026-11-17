@@ -1,75 +1,72 @@
-// A tiny static server for app/ (Node 22, standard library only), so the frontend can be run locally without a
-// build step: `node serve.ts` serves app/ on http://localhost:8080 (`--port <n>` for another port). It sends the MIME
-// types a browser needs, refuses any path outside app/, and otherwise does nothing clever: this is a development
-// convenience, not a web server for the internet.
-import { createReadStream, statSync } from 'node:fs';
+// Static server for local development and testing: serves app/ at the root
+// so http://localhost:8080 opens the frontend exactly as any static host
+// would. No build step, no proxying, no network calls of its own.
+//
+//   node serve.ts [--port 8080]
+
 import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(fileURLToPath(new URL('./app', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+const APP_DIR = resolve(fileURLToPath(new URL('./app', import.meta.url)));
 
-const MIME: Record<string, string> = {
+const TYPES = {
   '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.webmanifest': 'application/manifest+json',
 };
 
-createServer((request, response) => {
-  // Static files only: GET reads a file, HEAD reads its headers, anything
-  // else is not a thing this server does.
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    response.writeHead(405, { allow: 'GET, HEAD' }).end('method not allowed');
-    return;
-  }
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
+function portFromArgs() {
+  const i = process.argv.indexOf('--port');
+  const raw = i >= 0 ? process.argv[i + 1] : process.env.PORT;
+  const n = Number(raw ?? 8080);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : 8080;
+}
+
+const server = createServer(async (req, res) => {
   try {
-    pathname = decodeURIComponent(url.pathname);
-  } catch {
-    response.writeHead(400).end('bad request');
-    return;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'text/plain' });
+      res.end('Method not allowed\n');
+      return;
+    }
+    const url = new URL(req.url || '/', 'http://localhost');
+    let path = decodeURIComponent(url.pathname);
+    if (path === '/') path = '/index.html';
+    const file = resolve(join(APP_DIR, normalize(path).replace(/^(\.\.[/\\])+/, '')));
+    if (!file.startsWith(APP_DIR + sep)) {
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      res.end('Forbidden\n');
+      return;
+    }
+    const body = await readFile(file);
+    res.writeHead(200, {
+      'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream',
+      'content-length': body.length,
+      'cache-control': 'no-store',
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  } catch (err) {
+    if (err?.code === 'ENOENT' || err?.code === 'EISDIR') {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('Not found\n');
+      return;
+    }
+    res.writeHead(500, { 'content-type': 'text/plain' });
+    res.end('Server error\n');
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
-    return;
-  }
-  let size: number;
-  try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
-  }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
-  });
-  // HEAD gets the headers and no body.
-  if (request.method === 'HEAD') {
-    response.end();
-    return;
-  }
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`app/ is on http://localhost:${port}`);
+});
+
+const port = portFromArgs();
+server.listen(port, () => {
+  console.log(`Serving app/ at http://localhost:${port}`);
 });

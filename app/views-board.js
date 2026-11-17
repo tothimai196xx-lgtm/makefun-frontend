@@ -1,73 +1,119 @@
-// The board page: a function from API data to HTML.
-// Loaded on the first load (see main.js); the other pages load on demand.
+// The bounty board: every listed bounty with its live pot, entry fee, time
+// left and entry count. One API call, cached and ETag-revalidated, then the
+// filters (search, category, sort, open-only) re-render only the list, so
+// typing never steals focus or rebuilds the page.
 
-import { esc, money, num, takesEntries, timeLeft } from './format.js';
+import { getJson } from './api.js';
+import { esc, num, stillOpen, timeLeft, usd0 } from './format.js';
+import { errorView, loadingView } from './main.js';
 
-/** The reward as it stands now: the live pot, entry fees included. */
-export function pot(b) {
-  return money(b.potUsd ?? b.rewardAmount);
+function bountyOpen(c, now) {
+  return c.status === 'open' && stillOpen(c.deadline, now);
 }
 
-/** One board row: title, pot, entry fee, time left, entries. */
-function boardRow(b) {
-  const open = takesEntries(b);
-  return `
-      <li>
-        <h3><a href="#/bounty/${encodeURIComponent(b.slug)}">${esc(b.title)}</a></h3>
-        <p class="pot">${pot(b)}<small>live pot</small></p>
-        <p class="meta">
-          <span class="chip ${open ? 'open' : 'shut'}">${open ? 'Open' : 'Closed to entries'}</span>
-          <span>${esc(b.category || '')}</span>
-          <span>${b.entryFeeUsd ? money(b.entryFeeUsd) + ' entry fee' : 'Free to enter'}</span>
-          <span data-deadline="${esc(b.deadline)}">${timeLeft(b.deadline)}</span>
-          <span>${num(b.submissionCount)} ${b.submissionCount === 1 ? 'entry' : 'entries'}</span>
-        </p>
-      </li>`;
+function sortKey(sort) {
+  if (sort === 'pot') return (a, b) => Number(b.potUsd || 0) - Number(a.potUsd || 0);
+  if (sort === 'entries') return (a, b) => Number(b.submissionCount || 0) - Number(a.submissionCount || 0);
+  if (sort === 'newest') return (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt);
+  return (a, b) => new Date(a.deadline) - new Date(b.deadline); // ending soon
 }
 
-/** The live bounty board. ui: { q, cat, sort, openOnly, cats }. */
-export function boardView(items, ui) {
-  const q = ui.q.trim().toLowerCase();
-  let rows = items.filter((b) => {
-    if (ui.openOnly && !takesEntries(b)) return false;
-    if (ui.cat && b.category !== ui.cat) return false;
-    if (q && !(b.title + ' ' + b.slug + ' ' + (b.category || '')).toLowerCase().includes(q)) return false;
-    return true;
-  });
-  const by = {
-    ending: (a, b) => new Date(a.deadline) - new Date(b.deadline),
-    pot: (a, b) => Number(b.potUsd ?? b.rewardAmount) - Number(a.potUsd ?? a.rewardAmount),
-    entries: (a, b) => b.submissionCount - a.submissionCount,
-    newest: (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt),
-  };
-  rows = rows.slice().sort(by[ui.sort] || by.ending);
-  const totalPot = items.reduce((s, b) => s + Number(b.potUsd ?? b.rewardAmount ?? 0), 0);
-  const openCount = items.filter(takesEntries).length;
-  // The active category stays selectable even if a refetch no longer lists it,
-  // so the filter and the select never disagree about what is applied.
-  const cats = ui.cat && !ui.cats.includes(ui.cat) ? [ui.cat, ...ui.cats] : ui.cats;
-  const options = cats
-    .map((c) => `<option value="${esc(c)}"${c === ui.cat ? ' selected' : ''}>${esc(c)}</option>`)
-    .join('');
-  return `
+function rowHtml(c, now) {
+  const open = bountyOpen(c, now);
+  const endsSoon = open && new Date(c.deadline).getTime() - now < 24 * 3600 * 1000;
+  const pill = open
+    ? (endsSoon ? '<span class="pill soon">Closing soon</span>' : '<span class="pill open">Open</span>')
+    : '<span class="pill closed">Closed</span>';
+  const fee = c.entryFeeUsd ? `$${Number(c.entryFeeUsd).toFixed(2)} entry fee` : 'Free to enter';
+  const skills = (c.skills || []).slice(0, 4)
+    .map((s) => `<span class="tag">${esc(s)}</span>`).join('');
+  const summary = (c.summary || c.description || '').split('\n')[0].trim();
+  const short = summary.length > 180 ? summary.slice(0, 177) + '…' : summary;
+
+  return `<li class="row">
+    <div class="row-head">
+      <a class="row-title" href="#/bounty/${esc(c.slug)}">${esc(c.title)}</a>
+      <div class="row-pot"><b>${usd0(c.potUsd ?? c.rewardAmount)}</b><span>live pot</span></div>
+    </div>
+    <div class="row-meta">${pill}<span>${esc(c.category || '')}</span><span>${esc(fee)}</span><span>${esc(timeLeft(c.deadline, now))}</span><span>${num(c.submissionCount)} entries</span></div>
+    ${short ? `<p class="row-desc">${esc(short)}</p>` : ''}
+    ${skills ? `<div class="tags">${skills}</div>` : ''}
+  </li>`;
+}
+
+export async function renderBoard(container) {
+  container.innerHTML = loadingView();
+  let items;
+  try {
+    const data = await getJson('/competitions?status=open');
+    items = data.items || data.competitions || data || [];
+  } catch (err) {
+    container.innerHTML = errorView(err?.message || 'Could not load the bounty board.');
+    return;
+  }
+
+  const now = Date.now();
+  const openCount = items.filter((c) => bountyOpen(c, now)).length;
+  const totalPot = items.reduce((sum, c) => sum + (Number(c.potUsd) || 0), 0);
+  const categories = [...new Set(items.map((c) => c.category).filter(Boolean))].sort();
+
+  container.innerHTML = `
     <h1>Open bounties</h1>
-    <p class="stats"><span><b>${num(openCount)}</b> taking entries</span><span><b>${money(totalPot)}</b> in live pots</span><span><b>${num(items.length)}</b> listed</span></p>
-    <div class="toolbar" role="search">
-      <label class="vh" for="q">Search bounties</label>
-      <input id="q" type="search" placeholder="Search title or slug…" value="${esc(ui.q)}" autocomplete="off">
+    <div class="stats" role="status">
+      <div><b>${num(openCount)}</b> <span>taking entries</span></div>
+      <div><b>${usd0(totalPot)}</b> <span>in live pots</span></div>
+      <div><b>${num(items.length)}</b> <span>listed</span></div>
+    </div>
+    <div class="filters">
+      <input type="search" id="board-q" placeholder="Search title or slug…" aria-label="Search bounties">
       <label>Category
-        <select id="cat"><option value="">All categories</option>${options}</select>
-      </label>
-      <label>Sort
-        <select id="sort">
-          <option value="ending"${ui.sort === 'ending' ? ' selected' : ''}>Ending soon</option>
-          <option value="pot"${ui.sort === 'pot' ? ' selected' : ''}>Largest pot</option>
-          <option value="entries"${ui.sort === 'entries' ? ' selected' : ''}>Most entries</option>
-          <option value="newest"${ui.sort === 'newest' ? ' selected' : ''}>Newest</option>
+        <select id="board-cat" aria-label="Category">
+          <option value="">All categories</option>
+          ${categories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
         </select>
       </label>
-      <label><input id="openOnly" type="checkbox"${ui.openOnly ? ' checked' : ''}> Open only</label>
+      <label>Sort
+        <select id="board-sort" aria-label="Sort">
+          <option value="ending">Ending soon</option>
+          <option value="pot">Biggest pot</option>
+          <option value="entries">Most entries</option>
+          <option value="newest">Newest</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="board-open" checked> Open only</label>
     </div>
-    <ul class="board">${rows.map(boardRow).join('') || '<li>No bounties match.</li>'}</ul>
-    <p class="mut" id="board-note"></p>`;
+    <p class="countline" id="board-count"></p>
+    <ul class="rows" id="board-rows"></ul>`;
+
+  const qEl = container.querySelector('#board-q');
+  const catEl = container.querySelector('#board-cat');
+  const sortEl = container.querySelector('#board-sort');
+  const openEl = container.querySelector('#board-open');
+  const rowsEl = container.querySelector('#board-rows');
+  const countEl = container.querySelector('#board-count');
+
+  function renderList() {
+    const q = qEl.value.trim().toLowerCase();
+    const cat = catEl.value;
+    const filtered = items.filter((c) => {
+      if (openEl.checked && !bountyOpen(c, Date.now())) return false;
+      if (cat && c.category !== cat) return false;
+      if (q && !(String(c.title).toLowerCase().includes(q) || String(c.slug).toLowerCase().includes(q))) return false;
+      return true;
+    });
+    filtered.sort(sortKey(sortEl.value));
+    const t = Date.now();
+    rowsEl.innerHTML = filtered.length
+      ? filtered.map((c) => rowHtml(c, t)).join('')
+      : '<li class="empty">No bounties match those filters.</li>';
+    countEl.textContent = filtered.length === items.length
+      ? `${num(filtered.length)} bounties`
+      : `${num(filtered.length)} of ${num(items.length)} bounties`;
+  }
+
+  qEl.addEventListener('input', renderList);
+  catEl.addEventListener('change', renderList);
+  sortEl.addEventListener('change', renderList);
+  openEl.addEventListener('change', renderList);
+  renderList();
 }

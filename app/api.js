@@ -1,40 +1,83 @@
-// make.fun's public API: read-only GET requests, open to any origin (CORS).
-// Answers are cached and revalidated with ETag / If-None-Match: the API binds
-// its ETags to the minute, so a revisit inside the same minute answers 304.
-// A request that hangs is abandoned after 15 seconds so the page can show its
-// error state instead of spinning forever.
+// Read-only client for make.fun's public API.
+// One origin only: https://make.fun/api. Responses are cached in memory and
+// revalidated with ETags, which the API binds to the minute, so repeat visits
+// cost a 304 instead of a full download. A view never fetches the same URL
+// twice within a minute unless the caller forces it.
 
-const API = 'https://make.fun/api';
+export const API_ORIGIN = 'https://make.fun';
+export const API_BASE = API_ORIGIN + '/api';
 
-/** path -> { etag, body, at } */
-const cache = new Map();
+const cache = new Map(); // url -> { etag, data, at }
+const inflight = new Map(); // url -> Promise
+const FRESH_MS = 60_000;
+const TIMEOUT_MS = 15_000;
 
-export async function get(path) {
-  const hit = cache.get(path);
-  if (hit && Date.now() - hit.at < 60000) return hit.body;
-  const headers = {};
-  if (hit && hit.etag) headers['If-None-Match'] = hit.etag;
-  const res = await fetch(API + path, { headers, signal: AbortSignal.timeout(15000) });
-  if (res.status === 304 && hit) {
-    hit.at = Date.now();
-    return hit.body;
+export class ApiError extends Error {
+  constructor(status, message) {
+    super(message || ('Request failed' + (status ? ' (' + status + ')' : '')));
+    this.name = 'ApiError';
+    this.status = status;
   }
-  if (res.status === 304) throw new Error('make.fun API answered 304 with nothing cached');
-  if (!res.ok) throw new Error('make.fun API answered ' + res.status);
-  const body = await res.json();
-  cache.set(path, { etag: res.headers.get('ETag'), body, at: Date.now() });
-  return body;
 }
 
-/** The open bounties, one page: { items, next_cursor }. */
-export const getBounties = (cursor) =>
-  get('/competitions?status=open&activity=times&limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+/**
+ * GET a JSON resource, revalidating the cached copy with If-None-Match.
+ * @param {string} path - path under /api, e.g. "/competitions?status=open"
+ * @param {{force?: boolean}} [opts]
+ */
+export async function getJson(path, opts = {}) {
+  const url = API_BASE + path;
+  const now = Date.now();
+  const hit = cache.get(url);
 
-/** One bounty, by its slug. */
-export const getBounty = (slug) => get('/competitions/' + encodeURIComponent(slug));
+  if (!opts.force && hit && now - hit.at < FRESH_MS) return hit.data;
+  if (inflight.has(url)) return inflight.get(url);
 
-/** A bounty's leaderboard: { competition, phase, columns, entries }. */
-export const getLeaderboard = (slug) => get('/competitions/' + encodeURIComponent(slug) + '/leaderboard');
+  const job = (async () => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const headers = { accept: 'application/json' };
+      if (hit?.etag) headers['if-none-match'] = hit.etag;
+      const res = await fetch(url, { signal: ctrl.signal, headers, credentials: 'omit' });
+      if (res.status === 304 && hit) {
+        hit.at = Date.now();
+        return hit.data;
+      }
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const body = await res.json();
+          detail = body?.error?.message || body?.message || body?.detail || '';
+        } catch { /* keep the status */ }
+        throw new ApiError(res.status, detail || ('make.fun answered ' + res.status));
+      }
+      const data = await res.json();
+      cache.set(url, { etag: res.headers.get('etag'), data, at: Date.now() });
+      return data;
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        throw new ApiError(0, 'make.fun took too long to answer (15s). Check your connection and try again.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      inflight.delete(url);
+    }
+  })();
 
-/** An account's public profile, by its handle. */
-export const getProfile = (handle) => get('/profiles/' + encodeURIComponent(handle));
+  inflight.set(url, job);
+  return job;
+}
+
+/** Drop every cached entry (used after a manual refresh). */
+export function clearCache() {
+  cache.clear();
+}
+
+/** Absolute URL for an image the API points at (avatars, entry media). */
+export function apiImage(path) {
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  return API_ORIGIN + (path.startsWith('/') ? path : '/' + path);
+}
