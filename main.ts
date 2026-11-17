@@ -3,11 +3,14 @@
 // public API at https://make.fun/api. The program hands it in: it copies app/ and screenshots/ from beside this file
 // to /output and writes /output/dossier.json, the summary the judge reads (your screenshots, the first load's files
 // and bytes, and your source), with the vendored make.fun library. Leave vendor/makefun-frontend.ts as it is: the
-// scorer requires dossier.json to be byte for byte what its own copy writes.
+// scorer requires dossier.json to be byte for byte what its own copy writes, so the buildDossier call below — its
+// arguments included — must stay exactly as it is.
 //
-// A starting point, not a winner: a plain board of open bounties and a page for each. Build your frontend in app/
-// (a leaderboard, profiles, speed, ease of use), put 3 PNG or JPEG screenshots of it running on live data in
-// screenshots/ (the first by name is the cover; shots.json says which views this starter's were taken of), and run it.
+// The app itself: the live bounty board (search, category filter, sorting, open-only toggle, ticking deadlines), a
+// page for each bounty (live rewards table, dates, rules), its leaderboard (win rate with the 90% interval) and
+// public profiles (record, payouts, entries). First load is index.html + main.js; the rest loads after the first
+// paint. Put 3 PNG or JPEG screenshots of it running on live data in screenshots/ (the first by name is the cover;
+// shots.json says which views they were taken of), and run it.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

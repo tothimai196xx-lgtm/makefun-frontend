@@ -8,6 +8,12 @@ css.href = 'style.css';
 document.head.appendChild(css);
 import('./app.js').catch((err) => {
   const app = document.getElementById('app');
-  if (app) app.textContent = 'Could not start the app: ' + err.message;
+  if (app) {
+    const box = document.createElement('div');
+    box.className = 'error';
+    box.setAttribute('role', 'alert');
+    box.textContent = 'Could not start the app: ' + err.message;
+    app.replaceChildren(box);
+  }
   window.__shotReady = true;
 });

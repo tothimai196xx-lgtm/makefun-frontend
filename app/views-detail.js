@@ -1,7 +1,7 @@
 // The bounty, leaderboard and profile pages: functions from API data to HTML.
 // Loaded on demand by main.js, after the first load, with a literal import().
 
-import { bytes, date, esc, money, num, pct, takesEntries, timeLeft } from './format.js';
+import { bytes, date, esc, money, num, pct, takesEntries, timeLeft, yesno } from './format.js';
 import { pot } from './views-board.js';
 
 const SITE = 'https://make.fun';
@@ -14,15 +14,16 @@ function img(src, alt, cls) {
   return `<img class="${cls}" crossorigin="anonymous" src="${esc(url)}" alt="${esc(alt)}" loading="lazy">`;
 }
 
-/** Inline markdown: **bold**, `code`, and links [text](https://…). */
+/** Inline markdown: **bold**, `code`, and links [text](https://…). Links open
+ * in a new tab with rel="noopener" — the API text is not ours to trust. */
 function inline(text) {
   return esc(text)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" rel="noopener">$1</a>');
 }
 
-/** A bounty description: ## and ### headings, - lists, paragraphs. */
+/** A bounty description: #, ## and ### headings, > quotes, - lists, paragraphs. */
 export function md(text) {
   const lines = String(text ?? '').split('\n');
   let html = '';
@@ -40,6 +41,12 @@ export function md(text) {
     } else if (line.startsWith('## ')) {
       closeList();
       html += `<h2>${inline(line.slice(3))}</h2>`;
+    } else if (line.startsWith('# ')) {
+      closeList();
+      html += `<h2>${inline(line.slice(2))}</h2>`;
+    } else if (line.startsWith('> ')) {
+      closeList();
+      html += `<blockquote>${inline(line.slice(2))}</blockquote>`;
     } else if (line.startsWith('- ')) {
       if (!list) {
         html += '<ul>';
@@ -85,7 +92,7 @@ export function bountyView(b) {
       <dt>Sponsor</dt><dd>${esc(b.sponsor?.name || '—')}${b.sponsor?.isVerified ? ' ✓' : ''}</dd>
     </dl>
     <p><a href="#/bounty/${encodeURIComponent(b.slug)}/leaderboard">Leaderboard →</a> ·
-    <a href="${SITE}/bounty/${encodeURIComponent(b.slug)}">View on make.fun ↗</a></p>
+    <a href="${SITE}/bounty/${encodeURIComponent(b.slug)}" rel="noopener">View on make.fun ↗</a></p>
     <h2>Rewards</h2>
     <table>
       <thead><tr><th>Place</th><th class="num">Base</th><th class="num">From entry fees</th><th class="num">Now</th></tr></thead>
@@ -109,7 +116,7 @@ export function leaderboardView(lb, shown) {
         <td><span class="who">${img(e.image, e.handle + ' avatar', 'avatar sm')}<a href="#/u/${encodeURIComponent(e.handle)}">${esc(e.handle)}</a></span><br><span class="mut">${esc(e.title || '')}</span></td>
         <td class="num"><b>${pct(v.judge ?? d.judge)}</b></td>
         <td class="num">${pct(v.judge_low ?? d.judge_low)} – ${pct(v.judge_high ?? d.judge_high)}</td>
-        <td class="num">${v.valid ?? d.valid ?? '—'}</td>
+        <td class="num">${yesno(v.valid ?? d.valid)}</td>
         <td class="num">${bytes(v.bytes ?? d.bytes)}</td>
       </tr>`;
     })
@@ -155,7 +162,7 @@ export function profileView(p) {
         <h1>${esc(p.display_name || p.handle)}</h1>
         <p class="mut">@${esc(p.handle)} · joined ${date(p.joined_at)}</p>
         ${p.bio ? `<p>${esc(p.bio)}</p>` : ''}
-        <p>${p.github_login ? `<a href="https://github.com/${encodeURIComponent(p.github_login)}">GitHub: ${esc(p.github_login)}</a> · ` : ''}${p.x ? `<a href="https://x.com/${encodeURIComponent(p.x)}">X: ${esc(p.x)}</a> · ` : ''}${p.discord ? `<span>Discord: ${esc(p.discord)}</span>` : ''}</p>
+        <p>${p.github_login ? `<a href="https://github.com/${encodeURIComponent(p.github_login)}" rel="noopener">GitHub: ${esc(p.github_login)}</a> · ` : ''}${p.x ? `<a href="https://x.com/${encodeURIComponent(p.x)}" rel="noopener">X: ${esc(p.x)}</a> · ` : ''}${p.discord ? `<span>Discord: ${esc(p.discord)}</span>` : ''}</p>
       </div>
     </div>
     <div class="statgrid">

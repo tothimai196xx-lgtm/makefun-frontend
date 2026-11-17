@@ -46,11 +46,12 @@ tr.me td{background:var(--chip)}
 .facts{display:grid;grid-template-columns:max-content 1fr;gap:5px 18px;background:var(--card);border-radius:8px;padding:14px 16px;margin:14px 0}
 .facts dt{font-weight:600}
 .facts dd{margin:0}
-.desc{white-space:pre-wrap}
 .desc h2{margin:20px 0 6px}
 .desc h3{margin:16px 0 4px}
 .desc ul{margin:6px 0;padding-left:22px}
 .desc li{margin:3px 0}
+.desc blockquote{margin:10px 0;padding:2px 14px;border-left:3px solid var(--line);color:var(--mut)}
+.desc code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:14px}
 .profile-head{display:flex;gap:16px;align-items:flex-start;margin:16px 0}
 .avatar{width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--chip);flex:none}
 .avatar.sm{width:28px;height:28px;vertical-align:-8px;margin-right:6px}

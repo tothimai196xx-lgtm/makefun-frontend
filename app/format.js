@@ -55,6 +55,13 @@ export function pct(micro) {
   return (n / 10000).toFixed(2) + '%';
 }
 
+/** A yes/no/unknown value as 'Yes', 'No' or '—' (booleans stay readable). */
+export function yesno(value) {
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (value === null || value === undefined || value === '') return '—';
+  return String(value);
+}
+
 /** Bytes as '936 KB' or '1.2 MB'. */
 export function bytes(n) {
   n = Number(n);

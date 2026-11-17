@@ -43,7 +43,10 @@ export function boardView(items, ui) {
   rows = rows.slice().sort(by[ui.sort] || by.ending);
   const totalPot = items.reduce((s, b) => s + Number(b.potUsd ?? b.rewardAmount ?? 0), 0);
   const openCount = items.filter(takesEntries).length;
-  const cats = ui.cats
+  // The active category stays selectable even if a refetch no longer lists it,
+  // so the filter and the select never disagree about what is applied.
+  const cats = ui.cat && !ui.cats.includes(ui.cat) ? [ui.cat, ...ui.cats] : ui.cats;
+  const options = cats
     .map((c) => `<option value="${esc(c)}"${c === ui.cat ? ' selected' : ''}>${esc(c)}</option>`)
     .join('');
   return `
@@ -53,7 +56,7 @@ export function boardView(items, ui) {
       <label class="vh" for="q">Search bounties</label>
       <input id="q" type="search" placeholder="Search title or slug…" value="${esc(ui.q)}" autocomplete="off">
       <label>Category
-        <select id="cat"><option value="">All categories</option>${cats}</select>
+        <select id="cat"><option value="">All categories</option>${options}</select>
       </label>
       <label>Sort
         <select id="sort">

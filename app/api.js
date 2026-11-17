@@ -1,6 +1,8 @@
 // make.fun's public API: read-only GET requests, open to any origin (CORS).
 // Answers are cached and revalidated with ETag / If-None-Match: the API binds
 // its ETags to the minute, so a revisit inside the same minute answers 304.
+// A request that hangs is abandoned after 15 seconds so the page can show its
+// error state instead of spinning forever.
 
 const API = 'https://make.fun/api';
 
@@ -12,11 +14,12 @@ export async function get(path) {
   if (hit && Date.now() - hit.at < 60000) return hit.body;
   const headers = {};
   if (hit && hit.etag) headers['If-None-Match'] = hit.etag;
-  const res = await fetch(API + path, { headers });
+  const res = await fetch(API + path, { headers, signal: AbortSignal.timeout(15000) });
   if (res.status === 304 && hit) {
     hit.at = Date.now();
     return hit.body;
   }
+  if (res.status === 304) throw new Error('make.fun API answered 304 with nothing cached');
   if (!res.ok) throw new Error('make.fun API answered ' + res.status);
   const body = await res.json();
   cache.set(path, { etag: res.headers.get('ETag'), body, at: Date.now() });

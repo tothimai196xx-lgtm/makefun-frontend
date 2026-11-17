@@ -13,7 +13,7 @@
 
 import { getBounties, getBounty, getLeaderboard, getProfile } from './api.js';
 import { boardView } from './views-board.js';
-import { timeLeft } from './format.js';
+import { esc, timeLeft } from './format.js';
 
 /** The bounty, leaderboard and profile views load after the first load, so the
  * first load stays small: one literal import(), fetched once and cached. */
@@ -46,7 +46,8 @@ function loading(text) {
 }
 
 function failed(err) {
-  app.innerHTML = `<div class="error" role="alert"><p><b>Could not load this page.</b></p><p>${err.message}. The make.fun API may be unreachable — check the connection and retry.</p><p><button type="button" data-retry>Retry</button></p></div>`;
+  // The message comes from the network, so it is escaped like any API value.
+  app.innerHTML = `<div class="error" role="alert"><p><b>Could not load this page.</b></p><p>${esc(err.message)}. The make.fun API may be unreachable — check the connection and retry.</p><p><button type="button" data-retry>Retry</button></p></div>`;
   window.__shotReady = true;
 }
 
@@ -54,18 +55,27 @@ function title(text) {
   document.title = text + ' | make.fun bounties';
 }
 
+/** What had focus before a re-render, so it can be put back afterwards. */
+function focusState() {
+  const keep = document.activeElement?.id;
+  return { keep, caret: keep === 'q' ? document.getElementById('q')?.selectionStart ?? null : null };
+}
+
+/** Put focus back after a re-render (a refetch must not steal the keyboard). */
+function restoreFocus({ keep, caret }) {
+  const el = keep ? document.getElementById(keep) : null;
+  if (!el) return;
+  el.focus();
+  if (caret !== null && 'setSelectionRange' in el) el.setSelectionRange(caret, caret);
+}
+
 /** Re-render the board's list in place, keeping the filters focused. */
 function paintBoard() {
   const list = app.querySelector('.board');
   if (!list) return;
-  const keep = document.activeElement?.id;
-  const caret = keep === 'q' ? document.getElementById('q')?.selectionStart ?? null : null;
+  const focus = focusState();
   app.innerHTML = boardView(boardItems, ui);
-  const el = keep ? document.getElementById(keep) : null;
-  if (el) {
-    el.focus();
-    if (caret !== null && 'setSelectionRange' in el) el.setSelectionRange(caret, caret);
-  }
+  restoreFocus(focus);
   const note = document.getElementById('board-note');
   if (note) note.textContent = boardCursor ? 'Showing the first 50 open bounties — use search to narrow them.' : '';
 }
@@ -84,7 +94,9 @@ async function renderBoard() {
       return;
     }
   }
+  const focus = focusState();
   app.innerHTML = boardView(boardItems, ui);
+  restoreFocus(focus);
   const note = document.getElementById('board-note');
   if (note) note.textContent = boardCursor ? 'Showing the first 50 open bounties — use search to narrow them.' : '';
   window.__shotReady = true;
@@ -134,14 +146,16 @@ async function renderProfile(handle) {
   window.__shotReady = true;
 }
 
-async function render() {
+/** Render the current route. scroll: only a navigation scrolls to the top —
+ * the minute's background refetch must leave the reader where they are. */
+async function render({ scroll = true } = {}) {
   window.__shotReady = false;
   const r = route();
   if (r.name === 'bounty') await renderBounty(r.slug);
   else if (r.name === 'leaderboard') await renderLeaderboard(r.slug);
   else if (r.name === 'profile') await renderProfile(r.handle);
   else await renderBoard();
-  window.scrollTo(0, 0);
+  if (scroll) window.scrollTo(0, 0);
 }
 
 // Board controls: re-filter without losing focus or refetching.
@@ -181,8 +195,8 @@ setInterval(() => {
   for (const el of document.querySelectorAll('[data-deadline]')) el.textContent = timeLeft(el.dataset.deadline);
 }, 30000);
 setInterval(() => {
-  if (route().name === 'board' && boardItems.length) renderBoard();
+  if (route().name === 'board' && boardItems.length) render({ scroll: false });
 }, 60000);
 
-window.addEventListener('hashchange', render);
+window.addEventListener('hashchange', () => render());
 render();
